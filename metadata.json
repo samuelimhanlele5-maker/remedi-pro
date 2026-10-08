@@ -1,0 +1,6 @@
+{
+  "name": "Remedi Pro",
+  "description": "Production-ready educational quiz and CBT platform. Create, share, and master multi-subject assessments with live analytics and learning hubs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

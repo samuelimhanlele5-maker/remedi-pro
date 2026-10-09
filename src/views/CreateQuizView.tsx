@@ -57,6 +57,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [accessType, setAccessType] = useState<'public' | 'private'>('public');
+  const [maxAttempts, setMaxAttempts] = useState<number>(1);
   const [leaderboardEnabled, setLeaderboardEnabled] = useState(true);
   const [calculatorEnabled, setCalculatorEnabled] = useState(true);
 
@@ -110,6 +111,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
         setTitle(q.title);
         setDescription(q.description || '');
         setAccessType(q.accessType);
+        setMaxAttempts(q.maxAttempts ?? 1);
         setLeaderboardEnabled(q.leaderboardEnabled);
         setCalculatorEnabled(q.calculatorEnabled !== false);
 
@@ -476,6 +478,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
       durationMinutes: finalDuration,
       scoreScale: finalScale,
       accessType,
+      maxAttempts: accessType === 'private' ? 1 : maxAttempts,
       leaderboardEnabled,
       calculatorEnabled,
       questions: allQuestions,
@@ -781,7 +784,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
                 onChange={() => setAccessType('public')}
                 className="text-blue-600 focus:ring-blue-500"
               />
-              <span>Public (Browse & Links)</span>
+              <span>Public (anyone, name + email)</span>
             </label>
             <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
               <input
@@ -791,9 +794,28 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
                 onChange={() => setAccessType('private')}
                 className="text-blue-600 focus:ring-blue-500"
               />
-              <span>Private / Shareable Link Only</span>
+              <span>Private (registration + one-time code)</span>
             </label>
           </div>
+
+          {accessType === 'public' ? (
+            <div className="pt-2 flex items-center gap-3">
+              <label className="block text-xs font-semibold text-slate-700 mr-2">Attempts per email:</label>
+              <input
+                type="number"
+                min={0}
+                value={maxAttempts}
+                onChange={(e) => setMaxAttempts(Math.max(0, parseInt(e.target.value || '1', 10) || 0))}
+                className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+              <span className="text-[11px] text-slate-500">0 = unlimited</span>
+            </div>
+          ) : (
+            <p className="pt-2 text-[11px] text-slate-500 leading-relaxed">
+              Students register through a link you send them, get an exam code, and each code works once.
+              After saving, open <strong>My Quizzes</strong> and tap the registrations icon to get the link.
+            </p>
+          )}
         </div>
       </section>
 

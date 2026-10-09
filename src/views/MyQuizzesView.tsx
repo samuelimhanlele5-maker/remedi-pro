@@ -4,6 +4,7 @@ import { api } from '../services/api.ts';
 import { Quiz } from '../types.ts';
 import { LiveParticipantsModal } from './LiveParticipantsModal.tsx';
 import { LeaderboardModal } from './LeaderboardModal.tsx';
+import { RegistrationsModal } from './RegistrationsModal.tsx';
 import {
   FileQuestion,
   Search,
@@ -20,6 +21,7 @@ import {
   ExternalLink,
   Clock,
   Sparkles,
+  Users,
 } from 'lucide-react';
 
 interface MyQuizzesViewProps {
@@ -37,6 +39,7 @@ export const MyQuizzesView: React.FC<MyQuizzesViewProps> = ({ onNavigate, onTake
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [activeLiveModalQuiz, setActiveLiveModalQuiz] = useState<Quiz | null>(null);
   const [activeLeaderboardQuiz, setActiveLeaderboardQuiz] = useState<Quiz | null>(null);
+  const [activeRegistrationsQuiz, setActiveRegistrationsQuiz] = useState<Quiz | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const isCreatorOrAdmin = user?.role === 'creator' || user?.role === 'admin';
@@ -269,6 +272,17 @@ export const MyQuizzesView: React.FC<MyQuizzesViewProps> = ({ onNavigate, onTake
                       <Radio className="w-4 h-4" />
                     </button>
 
+                    {/* Registrations (private quizzes) */}
+                    {quiz.accessType === 'private' && (
+                      <button
+                        onClick={() => setActiveRegistrationsQuiz(quiz)}
+                        className="p-1.5 text-slate-600 hover:text-blue-600 rounded-lg hover:bg-white transition-colors"
+                        title="Registrations & exam codes"
+                      >
+                        <Users className="w-4 h-4" />
+                      </button>
+                    )}
+
                     {/* Leaderboard */}
                     <button
                       onClick={() => setActiveLeaderboardQuiz(quiz)}
@@ -366,6 +380,10 @@ export const MyQuizzesView: React.FC<MyQuizzesViewProps> = ({ onNavigate, onTake
           quizTitle={activeLiveModalQuiz.title}
           onClose={() => setActiveLiveModalQuiz(null)}
         />
+      )}
+
+      {activeRegistrationsQuiz && (
+        <RegistrationsModal quiz={activeRegistrationsQuiz} onClose={() => setActiveRegistrationsQuiz(null)} />
       )}
 
       {/* Leaderboard Modal */}

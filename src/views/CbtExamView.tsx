@@ -54,6 +54,8 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
   const [participantEmail, setParticipantEmail] = useState(user?.email || '');
   const [gateError, setGateError] = useState<string | null>(null);
   const [priorAttempt, setPriorAttempt] = useState<QuizAttempt | null>(null);
+  const [accessCode, setAccessCode] = useState('');
+  const isPrivate = quiz?.accessType === 'private';
 
   // Multi-Subject Selection
   const [selectedOptionalSubjects, setSelectedOptionalSubjects] = useState<string[]>([]);
@@ -118,15 +120,30 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
     e.preventDefault();
     setGateError(null);
 
-    if (!participantName.trim() || !participantEmail.trim()) {
+    if (!quiz) return;
+
+    const priv = quiz.accessType === 'private';
+    if (priv) {
+      if (!accessCode.trim()) {
+        setGateError('Please enter your exam code.');
+        return;
+      }
+    } else if (!participantName.trim() || !participantEmail.trim()) {
       setGateError('Please enter both your Full Name and Gmail / Email address.');
       return;
     }
 
-    if (!quiz) return;
-
     try {
-      const res = await api.checkAccess(quiz.id, participantEmail.trim());
+      let nameToUse = participantName.trim();
+      let emailToUse = participantEmail.trim();
+      if (priv) {
+        const v = await api.verifyCode(quiz.id, accessCode.trim());
+        nameToUse = v.name;
+        emailToUse = v.email;
+        setParticipantName(v.name);
+        setParticipantEmail(v.email);
+      }
+      const res = await api.checkAccess(quiz.id, emailToUse);
 
       if (!res.canAttempt && res.priorAttempt) {
         setPriorAttempt(res.priorAttempt);
@@ -143,7 +160,7 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
         setPhase('subject_selection');
       } else {
         const allSubs = quiz.subjects;
-        startExamWithSubjects(allSubs);
+        startExamWithSubjects(allSubs, { name: nameToUse, email: emailToUse });
       }
     } catch (err: any) {
       setGateError(err.message || 'Failed to verify exam access.');
@@ -151,7 +168,9 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
   };
 
   // Start Exam once subjects are confirmed
-  const startExamWithSubjects = async (chosenSubjects: string[]) => {
+  const startExamWithSubjects = async (chosenSubjects: string[], who?: { name: string; email: string }) => {
+    const effName = who?.name ?? participantName;
+    const effEmail = who?.email ?? participantEmail;
     if (!quiz) return;
 
     setFinalSelectedSubjects(chosenSubjects);
@@ -180,7 +199,7 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
     setStartedAt(nowIso);
 
     // Timer setup: check sessionStorage to prevent accidental reset on refresh
-    const sessionKey = `remedi_timer_${quiz.id}_${participantEmail.toLowerCase()}`;
+    const sessionKey = `remedi_timer_${quiz.id}_${effEmail.toLowerCase()}`;
     const durationSec = (quiz.durationMinutes || 0) * 60;
 
     if (quiz.durationMinutes) {
@@ -201,9 +220,10 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
     try {
       await api.startSession({
         quizId: quiz.id,
-        participantName: participantName.trim(),
-        participantEmail: participantEmail.trim(),
+        participantName: effName.trim(),
+        participantEmail: effEmail.trim(),
         selectedSubjects: chosenSubjects,
+        accessCode: isPrivate ? accessCode.trim() : undefined,
       });
     } catch (e) {
       console.warn('Could not register live session:', e);
@@ -349,6 +369,7 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
         quizId: quiz.id,
         participantName: participantName.trim(),
         participantEmail: participantEmail.trim(),
+        accessCode: isPrivate ? accessCode.trim() : undefined,
         userId: user?.id,
         selectedSubjects: finalSelectedSubjects,
         answers,
@@ -461,6 +482,28 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
           </div>
 
           <form onSubmit={handleProceedFromGate} className="p-6 space-y-4">
+            {isPrivate ? (
+              <>
+                <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100 text-xs text-blue-900 leading-relaxed">
+                  <strong>Private exam:</strong> Enter the exam code you received when you registered. Each code works only once.
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Exam Code <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={accessCode}
+                    onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. EX-7K3M9P"
+                    autoCapitalize="characters"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold tracking-widest focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
             <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100 text-xs text-blue-900 leading-relaxed">
               <strong>Candidate Verification:</strong> Enter your full name and Gmail/Email to authenticate your CBT examination score and prevent duplicate entries.
             </div>
@@ -499,6 +542,9 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all"
               />
             </div>
+
+              </>
+            )}
 
             <div className="pt-2">
               <button

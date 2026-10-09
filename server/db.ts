@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import pg from 'pg';
 
 export type CreatorAccessState = 'active' | 'trial' | 'expired' | 'disabled';
 
@@ -267,6 +268,11 @@ export function generateCreatorCode(existingCodes: string[] = []): string {
   } while (existingCodes.includes(code));
   return code;
 }
+
+// When DATABASE_URL is set (Vercel + Neon/Supabase Postgres) data lives in Postgres.
+// When it is not set (local dev), the app falls back to data/remedi_db.json as before.
+const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const pool = DATABASE_URL ? new pg.Pool({ connectionString: DATABASE_URL, max: 2 }) : null;
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'remedi_db.json');
@@ -719,9 +725,149 @@ const INITIAL_DB: DatabaseSchema = {
 class DatabaseManager {
   private db: DatabaseSchema;
 
+  public readonly usesPostgres = !!pool;
+  private lock: Promise<void> = Promise.resolve();
+  private tableReady = false;
+  private session: {
+    client: pg.PoolClient;
+    write: boolean;
+    snapshot: string;
+    releaseLock: () => void;
+  } | null = null;
+
   constructor() {
-    this.db = this.load();
+    this.db = pool ? this.normalize({}) : this.load();
     this.ensureCreatorIntegrity();
+  }
+
+  // ---- Postgres request lifecycle (used by server/app.ts) ----
+  // One request at a time per server instance; write requests also take a row lock
+  // in the database so two instances can never overwrite each other's changes.
+  public async beginRequest(write: boolean): Promise<void> {
+    if (!pool) return;
+    const prev = this.lock;
+    let releaseLock!: () => void;
+    this.lock = new Promise<void>((r) => (releaseLock = r));
+    await prev;
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await pool.connect();
+      if (!this.tableReady) {
+        await client.query(
+          'CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())'
+        );
+        this.tableReady = true;
+      }
+      if (write) await client.query('BEGIN');
+      const lockSql = write ? ' FOR UPDATE' : '';
+      let res = await client.query('SELECT data FROM app_state WHERE id = 1' + lockSql);
+      if (write && res.rowCount === 0) {
+        await client.query('INSERT INTO app_state (id, data) VALUES (1, $1) ON CONFLICT (id) DO NOTHING', [
+          JSON.stringify(this.normalize({})),
+        ]);
+        res = await client.query('SELECT data FROM app_state WHERE id = 1 FOR UPDATE');
+      }
+      this.db = this.normalize(res.rowCount ? res.rows[0].data : {});
+      this.ensureCreatorIntegrity();
+      this.session = { client, write, snapshot: JSON.stringify(this.db), releaseLock };
+    } catch (err) {
+      try {
+        if (client && write) await client.query('ROLLBACK');
+      } catch {}
+      if (client) client.release();
+      releaseLock();
+      throw err;
+    }
+  }
+
+  public async endRequest(commit: boolean): Promise<void> {
+    const s = this.session;
+    if (!s) return;
+    this.session = null;
+    try {
+      if (s.write) {
+        if (commit && JSON.stringify(this.db) !== s.snapshot) {
+          await s.client.query('UPDATE app_state SET data = $1, updated_at = now() WHERE id = 1', [
+            JSON.stringify(this.db),
+          ]);
+        }
+        await s.client.query(commit ? 'COMMIT' : 'ROLLBACK');
+      }
+    } catch (err) {
+      try {
+        await s.client.query('ROLLBACK');
+      } catch {}
+      s.client.release();
+      s.releaseLock();
+      throw err;
+    }
+    s.client.release();
+    s.releaseLock();
+  }
+
+  private normalize(parsed: any): DatabaseSchema {
+    // Ensure all collections exist and enrich with new features
+    const loadedHubs: LearningHub[] = (parsed.learningHubs || INITIAL_DB.learningHubs).map((h: any) => ({
+      ...h,
+      accessType: h.accessType || 'free',
+      membershipModel: h.membershipModel || 'free',
+      compulsorySubjects: h.compulsorySubjects || ['Biology', 'Chemistry'],
+      optionalSubjects: h.optionalSubjects || ['Physics', 'Mathematics', 'English'],
+      requiredOptionalCount: h.requiredOptionalCount ?? 1,
+      tutorialLinks: h.tutorialLinks || [],
+      assessmentQuizIds: h.assessmentQuizIds || (h.id === 'hub_stem_apex' ? ['quiz_utme_mock'] : []),
+    }));
+
+    const loadedMembers: HubMember[] = (parsed.hubMembers || INITIAL_DB.hubMembers).map((m: any) => ({
+      ...m,
+      selectedSubjects: m.selectedSubjects && m.selectedSubjects.length > 0 ? m.selectedSubjects : ['Biology', 'Chemistry', 'Physics'],
+      membershipType: m.membershipType || 'free',
+      completedAssessments: m.completedAssessments || [],
+    }));
+
+    const loadedUsers: User[] = (parsed.users || INITIAL_DB.users).map((u: any) => ({
+      ...u,
+      onlineTutorialLinks: u.onlineTutorialLinks || (u.id === 'usr_creator_1' ? [
+        {
+          id: 'ctut_1',
+          platform: 'youtube',
+          title: 'Dr. Evelyn Clark Official Science Channel',
+          url: 'https://youtube.com',
+        },
+        {
+          id: 'ctut_2',
+          platform: 'zoom',
+          title: 'Remedi Pro Science Masterclass Virtual Room',
+          url: 'https://zoom.us',
+        }
+      ] : []),
+    }));
+
+    const schema: DatabaseSchema = {
+      users: loadedUsers,
+      quizzes: parsed.quizzes || INITIAL_DB.quizzes,
+      questions: parsed.questions || INITIAL_DB.questions,
+      attempts: parsed.attempts || INITIAL_DB.attempts,
+      liveSessions: parsed.liveSessions || [],
+      learningHubs: loadedHubs,
+      hubMembers: loadedMembers,
+      hubMaterials: (parsed.hubMaterials || INITIAL_DB.hubMaterials).map((mat: any) => ({
+        ...mat,
+        isMemberOnly: mat.isMemberOnly !== false,
+      })),
+      follows: parsed.follows || INITIAL_DB.follows || [],
+      auditLogs: parsed.auditLogs || INITIAL_DB.auditLogs,
+      paymentRequests: parsed.paymentRequests || INITIAL_DB.paymentRequests,
+      systemSettings: {
+        ...INITIAL_DB.systemSettings,
+        ...(parsed.systemSettings || {}),
+        bankDetails: {
+          ...INITIAL_DB.systemSettings.bankDetails,
+          ...(parsed.systemSettings?.bankDetails || {}),
+        },
+      },
+    };
+    return schema;
   }
 
   private load(): DatabaseSchema {
@@ -732,68 +878,7 @@ class DatabaseManager {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        // Ensure all collections exist and enrich with new features
-        const loadedHubs: LearningHub[] = (parsed.learningHubs || INITIAL_DB.learningHubs).map((h: any) => ({
-          ...h,
-          accessType: h.accessType || 'free',
-          membershipModel: h.membershipModel || 'free',
-          compulsorySubjects: h.compulsorySubjects || ['Biology', 'Chemistry'],
-          optionalSubjects: h.optionalSubjects || ['Physics', 'Mathematics', 'English'],
-          requiredOptionalCount: h.requiredOptionalCount ?? 1,
-          tutorialLinks: h.tutorialLinks || [],
-          assessmentQuizIds: h.assessmentQuizIds || (h.id === 'hub_stem_apex' ? ['quiz_utme_mock'] : []),
-        }));
-
-        const loadedMembers: HubMember[] = (parsed.hubMembers || INITIAL_DB.hubMembers).map((m: any) => ({
-          ...m,
-          selectedSubjects: m.selectedSubjects && m.selectedSubjects.length > 0 ? m.selectedSubjects : ['Biology', 'Chemistry', 'Physics'],
-          membershipType: m.membershipType || 'free',
-          completedAssessments: m.completedAssessments || [],
-        }));
-
-        const loadedUsers: User[] = (parsed.users || INITIAL_DB.users).map((u: any) => ({
-          ...u,
-          onlineTutorialLinks: u.onlineTutorialLinks || (u.id === 'usr_creator_1' ? [
-            {
-              id: 'ctut_1',
-              platform: 'youtube',
-              title: 'Dr. Evelyn Clark Official Science Channel',
-              url: 'https://youtube.com',
-            },
-            {
-              id: 'ctut_2',
-              platform: 'zoom',
-              title: 'Remedi Pro Science Masterclass Virtual Room',
-              url: 'https://zoom.us',
-            }
-          ] : []),
-        }));
-
-        const schema: DatabaseSchema = {
-          users: loadedUsers,
-          quizzes: parsed.quizzes || INITIAL_DB.quizzes,
-          questions: parsed.questions || INITIAL_DB.questions,
-          attempts: parsed.attempts || INITIAL_DB.attempts,
-          liveSessions: parsed.liveSessions || [],
-          learningHubs: loadedHubs,
-          hubMembers: loadedMembers,
-          hubMaterials: (parsed.hubMaterials || INITIAL_DB.hubMaterials).map((mat: any) => ({
-            ...mat,
-            isMemberOnly: mat.isMemberOnly !== false,
-          })),
-          follows: parsed.follows || INITIAL_DB.follows || [],
-          auditLogs: parsed.auditLogs || INITIAL_DB.auditLogs,
-          paymentRequests: parsed.paymentRequests || INITIAL_DB.paymentRequests,
-          systemSettings: {
-            ...INITIAL_DB.systemSettings,
-            ...(parsed.systemSettings || {}),
-            bankDetails: {
-              ...INITIAL_DB.systemSettings.bankDetails,
-              ...(parsed.systemSettings?.bankDetails || {}),
-            },
-          },
-        };
-        return schema;
+        return this.normalize(parsed);
       }
     } catch (err) {
       console.error('Failed to load database, using initial dataset:', err);
@@ -846,6 +931,7 @@ class DatabaseManager {
   }
 
   private save(data: DatabaseSchema) {
+    if (pool) return; // Postgres mode saves once at the end of each request
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });

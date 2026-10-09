@@ -16,7 +16,7 @@ import {
   PaymentRequest,
   SystemSettings,
   generateCreatorCode,
-} from './db.ts';
+} from './db.js';
 
 export const apiRouter = Router();
 

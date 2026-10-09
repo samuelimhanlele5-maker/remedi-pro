@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { Router, Request, Response } from 'express';
 import {
   dbManager,
@@ -16,6 +17,7 @@ import {
   PaymentRequest,
   SystemSettings,
   generateCreatorCode,
+  Registration,
 } from './db.js';
 
 export const apiRouter = Router();
@@ -374,8 +376,14 @@ apiRouter.post('/quizzes', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Quiz title is required.' });
   }
 
+  // Only logged-in creators/admins can create quizzes
+  const authUser = getAuthUser(req);
+  if (!authUser || authUser.disabled || (authUser.role !== 'creator' && authUser.role !== 'admin')) {
+    return res.status(401).json({ error: 'Please create a creator account or log in to create quizzes.' });
+  }
+
   // Access check when payment system is enabled (Requirement 3 & 6)
-  const accessCheck = dbManager.checkCreatorAccess(creatorId);
+  const accessCheck = dbManager.checkCreatorAccess(authUser.id);
   if (!accessCheck.canCreateQuiz) {
     return res.status(403).json({
       error: accessCheck.message || 'Active creator subscription required to create new quizzes.',
@@ -399,8 +407,8 @@ apiRouter.post('/quizzes', (req: Request, res: Response) => {
 
   const newQuiz: Quiz = {
     id: quizId,
-    creatorId: creatorId || 'usr_creator_1',
-    creatorName: creatorName || 'Creator',
+    creatorId: authUser.id,
+    creatorName: authUser.fullName || creatorName || 'Creator',
     title: title.trim(),
     description: description ? description.trim() : '',
     coverImage: coverImage || '',
@@ -411,6 +419,7 @@ apiRouter.post('/quizzes', (req: Request, res: Response) => {
     durationMinutes: parsedDuration,
     scoreScale: validScale,
     accessType: accessType === 'private' ? 'private' : 'public',
+    maxAttempts: accessType === 'private' ? 1 : Math.max(0, parseNullableInt(req.body.maxAttempts) ?? 1),
     shareCode,
     leaderboardEnabled: leaderboardEnabled !== false,
     calculatorEnabled: Boolean(req.body.calculatorEnabled),
@@ -500,6 +509,9 @@ apiRouter.put('/quizzes/:id', (req: Request, res: Response) => {
       }
       target.scoreScale = validScale;
       if (accessType) target.accessType = accessType;
+      if (req.body.maxAttempts !== undefined) {
+        target.maxAttempts = target.accessType === 'private' ? 1 : Math.max(0, parseNullableInt(req.body.maxAttempts) ?? 1);
+      }
       if (leaderboardEnabled !== undefined) target.leaderboardEnabled = Boolean(leaderboardEnabled);
       if (req.body.calculatorEnabled !== undefined) target.calculatorEnabled = Boolean(req.body.calculatorEnabled);
       target.updatedAt = new Date().toISOString();
@@ -602,10 +614,11 @@ apiRouter.post('/cbt/check-access', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Quiz does not exist.' });
   }
 
-  // Check one-attempt rule
-  const priorAttempt = db.attempts.find(
+  // Check attempt limit (public quizzes: creator-set; private quizzes: always 1)
+  const priorAttempts = db.attempts.filter(
     (a) => a.quizId === quiz.id && a.participantEmail.toLowerCase() === cleanEmail
   );
+  const priorAttempt = priorAttempts.length >= attemptLimit(quiz) ? priorAttempts[priorAttempts.length - 1] : undefined;
 
   return res.json({
     canAttempt: !priorAttempt,
@@ -627,6 +640,11 @@ apiRouter.post('/cbt/start-session', (req: Request, res: Response) => {
   const quiz = db.quizzes.find((q) => q.id === quizId || q.shareCode.toUpperCase() === quizId.toUpperCase());
   if (!quiz) {
     return res.status(404).json({ error: 'Quiz not found.' });
+  }
+
+  const accessError = checkPrivateAccess(db, quiz, req.body.accessCode, cleanEmail);
+  if (accessError) {
+    return res.status(403).json({ error: accessError });
   }
 
   // Get total question count for chosen subjects
@@ -713,9 +731,14 @@ apiRouter.post('/cbt/submit', (req: Request, res: Response) => {
   }
 
   // Check one-attempt rule again
-  const existingAttempt = db.attempts.find(
+  const accessError = checkPrivateAccess(db, quiz, req.body.accessCode, cleanEmail);
+  if (accessError) {
+    return res.status(403).json({ error: accessError });
+  }
+  const priorAttempts = db.attempts.filter(
     (a) => a.quizId === quiz.id && a.participantEmail.toLowerCase() === cleanEmail
   );
+  const existingAttempt = priorAttempts.length >= attemptLimit(quiz) ? priorAttempts[priorAttempts.length - 1] : undefined;
   if (existingAttempt) {
     return res.status(409).json({
       error: 'You have already submitted an attempt for this quiz.',
@@ -799,6 +822,15 @@ apiRouter.post('/cbt/submit', (req: Request, res: Response) => {
 
   dbManager.update((state) => {
     state.attempts.push(attemptRecord);
+    if (quiz.accessType === 'private') {
+      const reg = state.registrations.find(
+        (r) => r.quizId === quiz.id && r.code === normCode(req.body.accessCode)
+      );
+      if (reg) {
+        reg.usedAt = new Date().toISOString();
+        reg.attemptId = attemptId;
+      }
+    }
     // Mark live session as completed
     const session = state.liveSessions.find(
       (s) => s.quizId === quiz.id && s.participantEmail.toLowerCase() === cleanEmail
@@ -1796,3 +1828,150 @@ apiRouter.post('/creator/payment-request', (req: Request, res: Response) => {
   });
 });
 
+
+// ==========================================
+// PRIVATE QUIZZES: REGISTRATION & ONE-TIME EXAM CODES
+// ==========================================
+
+function normCode(c: any): string {
+  return String(c || '').trim().toUpperCase();
+}
+
+function makeExamCode(existing: string[]): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  do {
+    code = 'EX-';
+    for (let i = 0; i < 6; i++) code += chars[randomInt(chars.length)];
+  } while (existing.includes(code));
+  return code;
+}
+
+function attemptLimit(quiz: Quiz): number {
+  if (quiz.accessType === 'private') return 1;
+  if (quiz.maxAttempts === 0) return Infinity;
+  return Math.max(1, quiz.maxAttempts ?? 1);
+}
+
+// Returns an error message if the code is not valid for this candidate, otherwise null
+function checkPrivateAccess(db: any, quiz: Quiz, code: any, email: string): string | null {
+  if (quiz.accessType !== 'private') return null;
+  const c = normCode(code);
+  if (!c) return 'An exam code is required for this private quiz.';
+  const reg = (db.registrations || []).find((r: Registration) => r.quizId === quiz.id && r.code === c);
+  if (!reg || reg.status === 'cancelled') return 'Invalid or cancelled exam code.';
+  if (reg.email.toLowerCase() !== email.toLowerCase()) return 'This exam code belongs to a different candidate.';
+  if (reg.attemptId) return 'This exam code has already been used.';
+  return null;
+}
+
+function canManageQuiz(req: Request, quiz: Quiz): boolean {
+  const u = getAuthUser(req);
+  return !!u && !u.disabled && (u.role === 'admin' || u.id === quiz.creatorId);
+}
+
+function createRegistration(
+  quiz: Quiz,
+  input: { name?: any; email?: any; phone?: any }
+): { error?: string; status?: number; registration?: Registration } {
+  const name = String(input.name || '').trim();
+  const email = String(input.email || '').trim().toLowerCase();
+  const phone = String(input.phone || '').trim();
+  if (!name) return { error: 'Full name is required.', status: 400 };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'A valid email is required.', status: 400 };
+  if (phone.replace(/\D/g, '').length < 7) return { error: 'A valid phone number is required.', status: 400 };
+
+  const db = dbManager.getData();
+  const dup = db.registrations.find((r) => r.quizId === quiz.id && r.email === email && r.status === 'active');
+  if (dup) {
+    return {
+      error: 'This email is already registered for this quiz. Ask the quiz creator to resend your exam code.',
+      status: 409,
+    };
+  }
+
+  const registration: Registration = {
+    id: generateId('reg'),
+    quizId: quiz.id,
+    name,
+    email,
+    phone,
+    code: makeExamCode(db.registrations.filter((r) => r.quizId === quiz.id).map((r) => r.code)),
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  };
+  dbManager.update((state) => {
+    state.registrations.push(registration);
+  });
+  return { registration };
+}
+
+// Student self-registration (opened from the creator's registration link)
+apiRouter.post('/quizzes/:idOrCode/register', (req: Request, res: Response) => {
+  const key = req.params.idOrCode;
+  const db = dbManager.getData();
+  const quiz = db.quizzes.find((q) => q.id === key || q.shareCode.toUpperCase() === key.toUpperCase());
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  if (quiz.accessType !== 'private') {
+    return res.status(400).json({ error: 'This quiz is public and does not need registration.' });
+  }
+  const result = createRegistration(quiz, req.body || {});
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  const r = result.registration!;
+  return res.status(201).json({
+    registration: { code: r.code, name: r.name, email: r.email },
+    quiz: { id: quiz.id, title: quiz.title },
+  });
+});
+
+// Creator: list registrations
+apiRouter.get('/quizzes/:id/registrations', (req: Request, res: Response) => {
+  const db = dbManager.getData();
+  const quiz = db.quizzes.find((q) => q.id === req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  if (!canManageQuiz(req, quiz)) return res.status(403).json({ error: 'Not allowed.' });
+  const list = db.registrations
+    .filter((r) => r.quizId === quiz.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return res.json({ registrations: list });
+});
+
+// Creator: add a student by hand
+apiRouter.post('/quizzes/:id/registrations', (req: Request, res: Response) => {
+  const db = dbManager.getData();
+  const quiz = db.quizzes.find((q) => q.id === req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  if (!canManageQuiz(req, quiz)) return res.status(403).json({ error: 'Not allowed.' });
+  const result = createRegistration(quiz, req.body || {});
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  return res.status(201).json({ registration: result.registration });
+});
+
+// Creator: cancel a code
+apiRouter.delete('/quizzes/:id/registrations/:regId', (req: Request, res: Response) => {
+  const db = dbManager.getData();
+  const quiz = db.quizzes.find((q) => q.id === req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  if (!canManageQuiz(req, quiz)) return res.status(403).json({ error: 'Not allowed.' });
+  const exists = db.registrations.some((r) => r.id === req.params.regId && r.quizId === quiz.id);
+  if (!exists) return res.status(404).json({ error: 'Registration not found.' });
+  dbManager.update((state) => {
+    const r = state.registrations.find((x) => x.id === req.params.regId);
+    if (r) r.status = 'cancelled';
+  });
+  return res.json({ ok: true });
+});
+
+// Student: check an exam code before starting
+apiRouter.post('/cbt/verify-code', (req: Request, res: Response) => {
+  const { quizId, code } = req.body || {};
+  if (!quizId || !code) return res.status(400).json({ error: 'quizId and code are required.' });
+  const db = dbManager.getData();
+  const quiz = db.quizzes.find((q) => q.id === quizId || q.shareCode.toUpperCase() === String(quizId).toUpperCase());
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  const c = normCode(code);
+  const reg = db.registrations.find((r) => r.quizId === quiz.id && r.code === c);
+  if (!reg || reg.status === 'cancelled') return res.status(403).json({ error: 'Invalid or cancelled exam code.' });
+  if (reg.attemptId) return res.status(403).json({ error: 'This exam code has already been used.' });
+  return res.json({ name: reg.name, email: reg.email });
+});

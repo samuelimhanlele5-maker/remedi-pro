@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import pg from 'pg';
+import type { PoolClient } from 'pg';
 
 export type CreatorAccessState = 'active' | 'trial' | 'expired' | 'disabled';
 
@@ -94,6 +95,7 @@ export interface Quiz {
   durationMinutes: number | null;
   scoreScale: number;
   accessType: 'public' | 'private';
+  maxAttempts?: number; // public quizzes: attempts allowed per email (0 = unlimited)
   shareCode: string;
   leaderboardEnabled: boolean;
   calculatorEnabled?: boolean;
@@ -241,7 +243,21 @@ export interface AuditLog {
   timestamp: string;
 }
 
+export interface Registration {
+  id: string;
+  quizId: string;
+  name: string;
+  email: string;
+  phone: string;
+  code: string;
+  status: 'active' | 'cancelled';
+  createdAt: string;
+  usedAt?: string;
+  attemptId?: string;
+}
+
 export interface DatabaseSchema {
+  registrations: Registration[];
   users: User[];
   quizzes: Quiz[];
   questions: Question[];
@@ -278,6 +294,7 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'remedi_db.json');
 
 const INITIAL_DB: DatabaseSchema = {
+  registrations: [],
   users: [
     {
       id: 'usr_admin',
@@ -729,7 +746,7 @@ class DatabaseManager {
   private lock: Promise<void> = Promise.resolve();
   private tableReady = false;
   private session: {
-    client: pg.PoolClient;
+    client: PoolClient;
     write: boolean;
     snapshot: string;
     releaseLock: () => void;
@@ -749,7 +766,7 @@ class DatabaseManager {
     let releaseLock!: () => void;
     this.lock = new Promise<void>((r) => (releaseLock = r));
     await prev;
-    let client: pg.PoolClient | undefined;
+    let client: PoolClient | undefined;
     try {
       client = await pool.connect();
       if (!this.tableReady) {
@@ -845,6 +862,7 @@ class DatabaseManager {
 
     const schema: DatabaseSchema = {
       users: loadedUsers,
+    registrations: Array.isArray(parsed.registrations) ? parsed.registrations : [],
       quizzes: parsed.quizzes || INITIAL_DB.quizzes,
       questions: parsed.questions || INITIAL_DB.questions,
       attempts: parsed.attempts || INITIAL_DB.attempts,

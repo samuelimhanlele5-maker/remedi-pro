@@ -173,6 +173,7 @@ export interface Quiz {
   durationMinutes: number | null;
   scoreScale: ScoreScale;
   accessType: 'public' | 'private';
+  maxAttempts?: number;
   shareCode: string;
   leaderboardEnabled: boolean;
   calculatorEnabled?: boolean;
@@ -346,4 +347,17 @@ export interface AdminStats {
     actor: string;
     timestamp: string;
   }[];
+}
+
+export interface Registration {
+  id: string;
+  quizId: string;
+  name: string;
+  email: string;
+  phone: string;
+  code: string;
+  status: 'active' | 'cancelled';
+  createdAt: string;
+  usedAt?: string;
+  attemptId?: string;
 }

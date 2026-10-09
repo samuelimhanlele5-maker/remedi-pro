@@ -16,6 +16,7 @@ import { AdminView } from './views/AdminView.tsx';
 import { LeaderboardModal } from './views/LeaderboardModal.tsx';
 import { AuthModal } from './views/AuthModal.tsx';
 import { TakeQuizModal } from './components/TakeQuizModal.tsx';
+import { RegisterForQuizView } from './views/RegisterForQuizView.tsx';
 
 function MainApp() {
   const { user } = useAuth();
@@ -25,12 +26,17 @@ function MainApp() {
   const [editQuizId, setEditQuizId] = useState<string | undefined>(undefined);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [takeQuizModalOpen, setTakeQuizModalOpen] = useState<boolean>(false);
+  const [registerQuizCode, setRegisterQuizCode] = useState<string | null>(null);
   const [standaloneLeaderboardQuiz, setStandaloneLeaderboardQuiz] = useState<{ id: string; title: string } | null>(null);
 
   // Check URL params on initial load for shareable link (e.g. ?quiz=REM-UTME-400)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const quizCode = params.get('quiz');
+    const regCode = params.get('register');
+    if (regCode) {
+      setRegisterQuizCode(regCode);
+    }
     if (quizCode) {
       setActiveQuizForCbt(quizCode);
     }
@@ -61,6 +67,18 @@ function MainApp() {
   };
 
   // If currently taking a CBT exam, render distraction-free examination stage
+  if (registerQuizCode) {
+    return (
+      <RegisterForQuizView
+        quizCode={registerQuizCode}
+        onClose={() => {
+          setRegisterQuizCode(null);
+          window.history.replaceState({}, '', window.location.pathname);
+        }}
+      />
+    );
+  }
+
   if (activeQuizForCbt) {
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
@@ -145,7 +163,24 @@ function MainApp() {
             />
           )}
 
-          {currentTab === 'create-quiz' && (
+          {currentTab === 'create-quiz' && !(user?.role === 'creator' || user?.role === 'admin') && (
+            <div className="max-w-md mx-auto mt-10 bg-white border border-slate-200 rounded-2xl p-6 text-center shadow-xs">
+              <h2 className="text-base font-bold text-slate-900">Create an account to make quizzes</h2>
+              <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                {user
+                  ? 'Your account is a student account. Sign up with a creator account to create quizzes.'
+                  : 'You can attempt quizzes without an account, but you need a creator account to create one.'}
+              </p>
+              <button
+                onClick={() => setAuthModalOpen(true)}
+                className="mt-4 px-4 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-xl"
+              >
+                {user ? 'Sign in with another account' : 'Create account / Log in'}
+              </button>
+            </div>
+          )}
+
+          {currentTab === 'create-quiz' && (user?.role === 'creator' || user?.role === 'admin') && (
             <CreateQuizView
               editQuizId={editQuizId}
               onNavigate={handleNavigate}

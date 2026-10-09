@@ -15,6 +15,7 @@ import {
   PaymentRequest,
   CreatorSummary,
   CreatorAccessStatus,
+  Registration,
 } from '../types.ts';
 
 const API_BASE = '/api';
@@ -107,6 +108,7 @@ export const api = {
     durationMinutes: number | null;
     scoreScale: ScoreScale;
     accessType: 'public' | 'private';
+    maxAttempts?: number;
     leaderboardEnabled: boolean;
     questions: Partial<Question>[];
   }) {
@@ -148,6 +150,38 @@ export const api = {
   },
 
   // CBT Flow
+  async registerForQuiz(idOrCode: string, data: { name: string; email: string; phone: string }) {
+    return request<{ registration: { code: string; name: string; email: string }; quiz: { id: string; title: string } }>(
+      `/quizzes/${encodeURIComponent(idOrCode)}/register`,
+      { method: 'POST', body: JSON.stringify(data) }
+    );
+  },
+
+  async listRegistrations(quizId: string) {
+    return request<{ registrations: Registration[] }>(`/quizzes/${encodeURIComponent(quizId)}/registrations`);
+  },
+
+  async addRegistration(quizId: string, data: { name: string; email: string; phone: string }) {
+    return request<{ registration: Registration }>(`/quizzes/${encodeURIComponent(quizId)}/registrations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async cancelRegistration(quizId: string, regId: string) {
+    return request<{ ok: boolean }>(
+      `/quizzes/${encodeURIComponent(quizId)}/registrations/${encodeURIComponent(regId)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async verifyCode(quizId: string, code: string) {
+    return request<{ name: string; email: string }>('/cbt/verify-code', {
+      method: 'POST',
+      body: JSON.stringify({ quizId, code }),
+    });
+  },
+
   async checkAccess(quizId: string, email: string) {
     return request<{ canAttempt: boolean; priorAttempt: QuizAttempt | null; quiz: Quiz }>('/cbt/check-access', {
       method: 'POST',
@@ -160,6 +194,7 @@ export const api = {
     participantName: string;
     participantEmail: string;
     selectedSubjects: string[];
+    accessCode?: string;
   }) {
     return request<{ session: any }>('/cbt/start-session', {
       method: 'POST',
@@ -183,6 +218,7 @@ export const api = {
     answers: Record<string, string>;
     timeUsedSeconds: number;
     startedAt: string;
+    accessCode?: string;
   }) {
     return request<{ attempt: QuizAttempt }>('/cbt/submit', {
       method: 'POST',

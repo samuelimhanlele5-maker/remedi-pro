@@ -26,14 +26,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers.set('Content-Type', 'application/json');
   }
 
-  // Attach session user id for server-side role validation (Requirement 10)
+  // Attach the signed login token so the server knows who is calling
   try {
-    const saved = localStorage.getItem('remedi_user_session');
-    if (saved) {
-      const u = JSON.parse(saved);
-      if (u?.id) {
-        headers.set('x-user-id', u.id);
-      }
+    const token = localStorage.getItem('remedi_auth_token');
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
     }
   } catch {}
 
@@ -91,8 +88,9 @@ export const api = {
     return request<{ quizzes: Quiz[] }>(`/quizzes${q}`);
   },
 
-  async getQuiz(idOrCode: string) {
-    return request<{ quiz: Quiz }>(`/quizzes/${encodeURIComponent(idOrCode)}`);
+  async getQuiz(idOrCode: string, examCode?: string) {
+    const q = examCode ? `?code=${encodeURIComponent(examCode)}` : '';
+    return request<{ quiz: Quiz }>(`/quizzes/${encodeURIComponent(idOrCode)}${q}`);
   },
 
   async createQuiz(data: {
@@ -109,6 +107,9 @@ export const api = {
     scoreScale: ScoreScale;
     accessType: 'public' | 'private';
     maxAttempts?: number;
+    listedPublicly?: boolean;
+    opensAt?: string | null;
+    windowHours?: number;
     leaderboardEnabled: boolean;
     questions: Partial<Question>[];
   }) {
@@ -183,7 +184,12 @@ export const api = {
   },
 
   async checkAccess(quizId: string, email: string) {
-    return request<{ canAttempt: boolean; priorAttempt: QuizAttempt | null; quiz: Quiz }>('/cbt/check-access', {
+    return request<{
+      canAttempt: boolean;
+      priorAttempt: QuizAttempt | null;
+      quiz: Quiz;
+      schedule?: { status: 'upcoming' | 'open' | 'closed'; opensAt: string | null; closesAt: string | null };
+    }>('/cbt/check-access', {
       method: 'POST',
       body: JSON.stringify({ quizId, email }),
     });

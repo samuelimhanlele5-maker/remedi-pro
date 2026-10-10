@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Remedi Pro</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="description" content="Production-ready educational quiz and CBT platform. Create, share, and master multi-subject assessments with live analytics and learning hubs." />
     <meta property="og:title" content="Remedi Pro" />
     <meta property="og:description" content="Production-ready educational quiz and CBT platform. Create, share, and master multi-subject assessments with live analytics and learning hubs." />
@@ -16,6 +21,13 @@
   <body class="bg-slate-50 text-slate-900 antialiased font-sans">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+      }
+    </script>
   </body>
 </html>
 

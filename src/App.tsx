@@ -19,7 +19,7 @@ import { TakeQuizModal } from './components/TakeQuizModal.tsx';
 import { RegisterForQuizView } from './views/RegisterForQuizView.tsx';
 
 function MainApp() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [activeQuizForCbt, setActiveQuizForCbt] = useState<string | null>(null);
@@ -67,6 +67,13 @@ function MainApp() {
   };
 
   // If currently taking a CBT exam, render distraction-free examination stage
+  // Visitors (logged out) can only see the public quiz list
+  useEffect(() => {
+    if (!authLoading && !user && currentTab !== 'dashboard') {
+      setCurrentTab('dashboard');
+    }
+  }, [authLoading, user, currentTab]);
+
   if (registerQuizCode) {
     return (
       <RegisterForQuizView
@@ -145,6 +152,7 @@ function MainApp() {
           onSelectTab={handleNavigate}
           mobileOpen={mobileSidebarOpen}
           onCloseMobile={() => setMobileSidebarOpen(false)}
+          onOpenAuthModal={() => setAuthModalOpen(true)}
         />
 
         {/* Content Viewport */}
@@ -153,6 +161,7 @@ function MainApp() {
             <DashboardView
               onNavigate={handleNavigate}
               onTakeQuiz={handleStartQuiz}
+              onOpenAuthModal={() => setAuthModalOpen(true)}
             />
           )}
 

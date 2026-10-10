@@ -4,8 +4,17 @@ import { dbManager } from './db.js';
 
 // Opens a database session for each API request and saves/commits it before the response is sent.
 // Does nothing when DATABASE_URL is not set (local file mode).
-function dbSession(req: Request, res: Response, next: NextFunction) {
-  if (!dbManager.usesPostgres) return next();
+export function dbSession(req: Request, res: Response, next: NextFunction) {
+  // Never let browsers or proxies cache API answers (a stale list looks like missing data)
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (!dbManager.usesPostgres) {
+    // On Vercel there is no permanent disk: refuse instead of silently saving nowhere
+    if (process.env.VERCEL) {
+      return res.status(503).json({ error: 'Database is not connected for this deployment (DATABASE_URL is missing).' });
+    }
+    return next();
+  }
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
   dbManager

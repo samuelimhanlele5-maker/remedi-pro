@@ -1,4 +1,5 @@
 import { randomInt } from 'crypto';
+import { hashPassword, verifyPassword, signToken, verifyToken, safeEqual } from './auth.js';
 import { Router, Request, Response } from 'express';
 import {
   dbManager,
@@ -34,9 +35,11 @@ export function parseNullableInt(val: any): number | null {
   return isNaN(parsed) ? null : parsed;
 }
 
-// Helper to extract authenticated user from x-user-id header
+// Helper to extract the authenticated user from the signed login token (Authorization: Bearer ...)
 export function getAuthUser(req: Request): User | null {
-  const userId = (req.headers['x-user-id'] as string) || '';
+  const header = String(req.headers['authorization'] || '');
+  if (!header.startsWith('Bearer ')) return null;
+  const userId = verifyToken(header.slice(7).trim());
   if (!userId) return null;
   const db = dbManager.getData();
   return db.users.find((u) => u.id === userId) || null;
@@ -88,7 +91,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
   const newUser: User = {
     id: generateId('usr'),
     email: cleanEmail,
-    password: password.trim(),
+    password: hashPassword(password.trim()),
     fullName: fullName.trim(),
     role: assignedRole,
     disabled: false,
@@ -112,7 +115,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
   });
 
   const { password: _, ...userSafe } = newUser;
-  return res.status(201).json({ user: userSafe, token: `token_${newUser.id}` });
+  return res.status(201).json({ user: userSafe, token: signToken(newUser.id) });
 });
 
 apiRouter.post('/auth/login', (req: Request, res: Response) => {
@@ -125,8 +128,30 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   const db = dbManager.getData();
   const user = db.users.find((u) => u.email === cleanEmail);
 
-  if (!user || user.password !== password.trim()) {
+  if (!user) {
     return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+
+  // The admin password is controlled by the ADMIN_PASSWORD setting on the server
+  let passwordOk = false;
+  let legacyHash = false;
+  if (user.id === 'usr_admin' && process.env.ADMIN_PASSWORD) {
+    passwordOk = safeEqual(password.trim(), process.env.ADMIN_PASSWORD);
+  } else if (user.id === 'usr_admin' && process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'Admin login is not configured yet. Set ADMIN_PASSWORD on the server.' });
+  } else {
+    const v = verifyPassword(password.trim(), user.password);
+    passwordOk = v.ok;
+    legacyHash = v.ok && v.legacy;
+  }
+  if (!passwordOk) {
+    return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+  if (legacyHash) {
+    dbManager.update((state) => {
+      const t = state.users.find((u) => u.id === user.id);
+      if (t) t.password = hashPassword(password.trim());
+    });
   }
 
   if (user.disabled) {
@@ -134,7 +159,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   }
 
   const { password: _, ...userSafe } = user;
-  return res.json({ user: userSafe, token: `token_${user.id}` });
+  return res.json({ user: userSafe, token: signToken(user.id) });
 });
 
 apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
@@ -143,7 +168,17 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Email and new password are required.' });
   }
 
+  const authUser = getAuthUser(req);
+  if (!authUser) {
+    return res.status(401).json({
+      error: 'Password reset by email is not available yet. Please contact the platform admin to reset your password.',
+    });
+  }
+
   const cleanEmail = email.trim().toLowerCase();
+  if (authUser.email !== cleanEmail && authUser.role !== 'admin') {
+    return res.status(403).json({ error: 'You can only change your own password.' });
+  }
   const db = dbManager.getData();
   const user = db.users.find((u) => u.email === cleanEmail);
 
@@ -154,7 +189,7 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
   dbManager.update((state) => {
     const target = state.users.find((u) => u.email === cleanEmail);
     if (target) {
-      target.password = newPassword.trim();
+      target.password = hashPassword(newPassword.trim());
     }
     state.auditLogs.unshift({
       id: generateId('log'),
@@ -171,6 +206,10 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
 apiRouter.put('/users/:id/profile', (req: Request, res: Response) => {
   const { id } = req.params;
   const { fullName, bio, role } = req.body;
+  const authUser = getAuthUser(req);
+  if (!authUser || (authUser.id !== id && authUser.role !== 'admin')) {
+    return res.status(403).json({ error: 'You can only edit your own profile.' });
+  }
   const db = dbManager.getData();
   const user = db.users.find((u) => u.id === id);
 
@@ -254,6 +293,16 @@ apiRouter.get('/quizzes', (req: Request, res: Response) => {
     list = list.filter((q) => q.creatorId === authUser.id);
   }
 
+  // Private quizzes are hidden from public lists (only the owner and admin can see them) unless the creator lists them
+  if (!creatorId && !creatorOnly) {
+    list = list.filter(
+      (q) =>
+        q.accessType !== 'private' ||
+        q.listedPublicly === true ||
+        (!!authUser && (authUser.role === 'admin' || authUser.id === q.creatorId))
+    );
+  }
+
   // Calculate summary metrics for creator dashboard
   const enriched = list.map((quiz) => {
     const attempts = db.attempts.filter((a) => a.quizId === quiz.id);
@@ -333,9 +382,23 @@ apiRouter.get('/quizzes/:idOrCode', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Quiz not found.' });
   }
 
-  const questions = db.questions
+  const allQuestions = db.questions
     .filter((q) => q.quizId === quiz.id)
     .sort((a, b) => a.order - b.order);
+
+  // Only the owner/admin receive correct answers. Students never do.
+  // Private quiz questions are sent only after a valid, unused exam code.
+  let questions: any[];
+  if (canManageQuiz(req, quiz)) {
+    questions = allQuestions;
+  } else if (quiz.accessType === 'private' && !validCodeForQuiz(db, quiz, req.query.code)) {
+    questions = allQuestions.map((q) => ({ id: q.id, quizId: q.quizId, subject: q.subject, order: q.order }));
+  } else {
+    questions = allQuestions.map((q: any) => {
+      const { answer, explanation, ...safe } = q;
+      return safe;
+    });
+  }
 
   const attempts = db.attempts.filter((a) => a.quizId === quiz.id);
   const participantCount = attempts.length;
@@ -420,6 +483,8 @@ apiRouter.post('/quizzes', (req: Request, res: Response) => {
     scoreScale: validScale,
     accessType: accessType === 'private' ? 'private' : 'public',
     maxAttempts: accessType === 'private' ? 1 : Math.max(0, parseNullableInt(req.body.maxAttempts) ?? 1),
+    listedPublicly: accessType === 'private' ? req.body.listedPublicly === true : true,
+    ...scheduleFields(req.body),
     shareCode,
     leaderboardEnabled: leaderboardEnabled !== false,
     calculatorEnabled: Boolean(req.body.calculatorEnabled),
@@ -511,6 +576,18 @@ apiRouter.put('/quizzes/:id', (req: Request, res: Response) => {
       if (accessType) target.accessType = accessType;
       if (req.body.maxAttempts !== undefined) {
         target.maxAttempts = target.accessType === 'private' ? 1 : Math.max(0, parseNullableInt(req.body.maxAttempts) ?? 1);
+      }
+      if (req.body.listedPublicly !== undefined || accessType) {
+        target.listedPublicly = target.accessType === 'private' ? req.body.listedPublicly === true : true;
+      }
+      if (req.body.opensAt !== undefined || req.body.windowHours !== undefined) {
+        Object.assign(
+          target,
+          scheduleFields({
+            opensAt: req.body.opensAt !== undefined ? req.body.opensAt : target.opensAt,
+            windowHours: req.body.windowHours ?? target.windowHours,
+          })
+        );
       }
       if (leaderboardEnabled !== undefined) target.leaderboardEnabled = Boolean(leaderboardEnabled);
       if (req.body.calculatorEnabled !== undefined) target.calculatorEnabled = Boolean(req.body.calculatorEnabled);
@@ -622,6 +699,11 @@ apiRouter.post('/cbt/check-access', (req: Request, res: Response) => {
 
   return res.json({
     canAttempt: !priorAttempt,
+    schedule: {
+      status: canManageQuiz(req, quiz) ? 'open' : scheduleStatus(quiz),
+      opensAt: quiz.opensAt || null,
+      closesAt: quiz.closesAt || null,
+    },
     priorAttempt: priorAttempt || null,
     quiz,
   });
@@ -645,6 +727,10 @@ apiRouter.post('/cbt/start-session', (req: Request, res: Response) => {
   const accessError = checkPrivateAccess(db, quiz, req.body.accessCode, cleanEmail);
   if (accessError) {
     return res.status(403).json({ error: accessError });
+  }
+  const startBlocked = scheduleBlock(req, quiz);
+  if (startBlocked) {
+    return res.status(403).json({ error: startBlocked });
   }
 
   // Get total question count for chosen subjects
@@ -734,6 +820,14 @@ apiRouter.post('/cbt/submit', (req: Request, res: Response) => {
   const accessError = checkPrivateAccess(db, quiz, req.body.accessCode, cleanEmail);
   if (accessError) {
     return res.status(403).json({ error: accessError });
+  }
+  const submitBlocked = scheduleBlock(req, quiz);
+  if (submitBlocked) {
+    // Outside the window, only people who started inside it may still submit
+    const hadSession = db.liveSessions.some(
+      (s) => s.quizId === quiz.id && s.participantEmail.toLowerCase() === cleanEmail
+    );
+    if (!hadSession) return res.status(403).json({ error: submitBlocked });
   }
   const priorAttempts = db.attempts.filter(
     (a) => a.quizId === quiz.id && a.participantEmail.toLowerCase() === cleanEmail
@@ -904,7 +998,12 @@ apiRouter.get('/cbt/attempt/:id', (req: Request, res: Response) => {
   const quiz = db.quizzes.find((q) => q.id === attempt.quizId);
   const questions = db.questions.filter((q) => q.quizId === attempt.quizId);
 
-  return res.json({ attempt, quiz, questions });
+  const mayReview = quiz ? canManageQuiz(req, quiz) : false;
+  return res.json({
+    attempt,
+    quiz,
+    questions: mayReview ? questions : questions.map(({ answer, explanation, ...safe }: any) => safe),
+  });
 });
 
 // Creator/Admin Reset participant attempt
@@ -912,7 +1011,25 @@ apiRouter.post('/cbt/reset-attempt', (req: Request, res: Response) => {
   const { attemptId, quizId, participantEmail } = req.body;
   const db = dbManager.getData();
 
+  const targetAttempt = attemptId ? db.attempts.find((a) => a.id === attemptId) : undefined;
+  const targetQuizId = targetAttempt ? targetAttempt.quizId : quizId;
+  const targetQuiz = db.quizzes.find((q) => q.id === targetQuizId);
+  if (!targetQuiz) {
+    return res.status(404).json({ error: 'Quiz not found.' });
+  }
+  if (!canManageQuiz(req, targetQuiz)) {
+    return res.status(403).json({ error: 'Only the quiz owner or admin can allow a retake.' });
+  }
+  const retakeEmail = String(targetAttempt?.participantEmail || participantEmail || '').trim().toLowerCase();
+
   dbManager.update((state) => {
+    // Free the student's one-time exam code so it can be used again
+    state.registrations.forEach((r) => {
+      if (r.quizId === targetQuizId && ((attemptId && r.attemptId === attemptId) || (retakeEmail && r.email === retakeEmail))) {
+        delete r.attemptId;
+        delete r.usedAt;
+      }
+    });
     if (attemptId) {
       state.attempts = state.attempts.filter((a) => a.id !== attemptId);
     } else if (quizId && participantEmail) {
@@ -1001,7 +1118,7 @@ apiRouter.get('/quizzes/:id/leaderboard', (req: Request, res: Response) => {
     rank: idx + 1,
     attemptId: att.id,
     student: att.participantName,
-    email: att.participantEmail,
+    email: canManageQuiz(req, quiz) ? att.participantEmail : '',
     subjects: att.selectedSubjects.join(', '),
     score: att.formattedScore,
     numericScore: att.finalScore,
@@ -1975,3 +2092,42 @@ apiRouter.post('/cbt/verify-code', (req: Request, res: Response) => {
   if (reg.attemptId) return res.status(403).json({ error: 'This exam code has already been used.' });
   return res.json({ name: reg.name, email: reg.email });
 });
+
+
+// ==========================================
+// SCHEDULED MOCK WINDOW & PRIVATE CODE CHECK
+// ==========================================
+
+function scheduleFields(body: any): { opensAt: string | null; closesAt: string | null; windowHours: number } {
+  const hours = Math.min(24 * 30, Math.max(1, parseNullableInt(body?.windowHours) ?? 24));
+  const opens = body?.opensAt ? new Date(body.opensAt) : null;
+  if (!opens || isNaN(opens.getTime())) return { opensAt: null, closesAt: null, windowHours: hours };
+  return {
+    opensAt: opens.toISOString(),
+    closesAt: new Date(opens.getTime() + hours * 3600 * 1000).toISOString(),
+    windowHours: hours,
+  };
+}
+
+function scheduleStatus(quiz: Quiz): 'upcoming' | 'open' | 'closed' {
+  if (!quiz.opensAt || !quiz.closesAt) return 'open';
+  const now = Date.now();
+  if (now < Date.parse(quiz.opensAt)) return 'upcoming';
+  if (now > Date.parse(quiz.closesAt)) return 'closed';
+  return 'open';
+}
+
+function scheduleBlock(req: Request, quiz: Quiz): string | null {
+  if (canManageQuiz(req, quiz)) return null;
+  const st = scheduleStatus(quiz);
+  if (st === 'open') return null;
+  return st === 'upcoming' ? 'This quiz has not opened yet.' : 'This quiz is closed.';
+}
+
+function validCodeForQuiz(db: any, quiz: Quiz, code: any): boolean {
+  const c = normCode(code);
+  if (!c) return false;
+  return (db.registrations || []).some(
+    (r: Registration) => r.quizId === quiz.id && r.code === c && r.status === 'active' && !r.attemptId
+  );
+}

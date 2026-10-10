@@ -57,10 +57,10 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [accessType, setAccessType] = useState<'public' | 'private'>('public');
-  const [maxAttempts, setMaxAttempts] = useState<number>(1);
+  const [maxAttempts, setMaxAttempts] = useState<number | ''>(1);
   const [listedPublicly, setListedPublicly] = useState<boolean>(false);
   const [opensAtLocal, setOpensAtLocal] = useState<string>('');
-  const [windowHours, setWindowHours] = useState<number>(24);
+  const [windowHours, setWindowHours] = useState<number | ''>(24);
   const [leaderboardEnabled, setLeaderboardEnabled] = useState(true);
   const [calculatorEnabled, setCalculatorEnabled] = useState(true);
 
@@ -492,10 +492,10 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
       durationMinutes: finalDuration,
       scoreScale: finalScale,
       accessType,
-      maxAttempts: accessType === 'private' ? 1 : maxAttempts,
+      maxAttempts: accessType === 'private' ? 1 : maxAttempts === '' ? 1 : maxAttempts,
       listedPublicly: accessType === 'private' ? listedPublicly : true,
       opensAt: opensAtLocal ? new Date(opensAtLocal).toISOString() : null,
-      windowHours,
+      windowHours: windowHours === '' ? 24 : windowHours,
       leaderboardEnabled,
       calculatorEnabled,
       questions: allQuestions,
@@ -822,7 +822,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
                 type="number"
                 min={0}
                 value={maxAttempts}
-                onChange={(e) => setMaxAttempts(Math.max(0, parseInt(e.target.value || '1', 10) || 0))}
+                onChange={(e) => setMaxAttempts(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
                 className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
               <span className="text-[11px] text-slate-500">0 = unlimited</span>
@@ -860,7 +860,7 @@ export const CreateQuizView: React.FC<CreateQuizViewProps> = ({
                 type="number"
                 min={1}
                 value={windowHours}
-                onChange={(e) => setWindowHours(Math.max(1, parseInt(e.target.value || '24', 10) || 24))}
+                onChange={(e) => setWindowHours(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value, 10) || 1))}
                 className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
               <span className="text-[11px] text-slate-500">hours</span>

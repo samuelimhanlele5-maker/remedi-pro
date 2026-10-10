@@ -48,7 +48,9 @@ export const MyQuizzesView: React.FC<MyQuizzesViewProps> = ({ onNavigate, onTake
     try {
       setLoading(true);
       const res = await api.getQuizzes();
-      setQuizzes(res.quizzes || []);
+      // Only your own quizzes (admin sees all)
+      const all = res.quizzes || [];
+      setQuizzes(user?.role === 'admin' ? all : all.filter((q) => q.creatorId === user?.id));
     } catch (e) {
       console.error('Error fetching quizzes:', e);
     } finally {

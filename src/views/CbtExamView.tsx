@@ -313,14 +313,14 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
       }, 1000);
     }
 
-    // Heartbeat every 8s to update live progress for creator
+    // Heartbeat every 20s to update live progress for creator
     heartbeatRef.current = setInterval(() => {
       api.sendHeartbeat({
         quizId: quiz.id,
         participantEmail: participantEmail.trim(),
         currentQuestionIndex: (subjectQuestionIndices[currentSubjectName] || 0) + 1,
       }).catch(() => {});
-    }, 8000);
+    }, 20000);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);

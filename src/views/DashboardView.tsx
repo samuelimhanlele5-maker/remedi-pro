@@ -30,9 +30,10 @@ import {
 interface DashboardViewProps {
   onNavigate: (tab: string, meta?: any) => void;
   onTakeQuiz: (quizIdOrCode: string) => void;
+  onOpenAuthModal?: () => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTakeQuiz }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTakeQuiz, onOpenAuthModal }) => {
   const { user } = useAuth();
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [hubCount, setHubCount] = useState<number>(0);
@@ -47,6 +48,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
   const [copiedCode, setCopiedCode] = useState(false);
 
   const isCreatorOrAdmin = user?.role === 'creator' || user?.role === 'admin';
+  const isGuest = !user;
 
   const loadDashboardData = async () => {
     try {
@@ -121,6 +123,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
   // Aggregated metrics
   // Admin sees platform-wide totals; creators see only their own quizzes; students/guests see no totals
   const statQuizzes = user?.role === 'admin' ? quizzes : quizzes.filter((q) => q.creatorId === user?.id);
+  // Creators see only their own quizzes in the list; admin sees all; students and visitors see public quizzes
+  const listQuizzes = isCreatorOrAdmin ? statQuizzes : quizzes;
   const totalQuizzes = statQuizzes.length;
   const totalParticipants = statQuizzes.reduce((acc, q) => acc + (q.participantCount || 0), 0);
   const weightedScoreSum = statQuizzes.reduce((acc, q) => acc + (q.avgScore || 0) * (q.participantCount || 0), 0);
@@ -185,7 +189,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
           )}
 
           {/* Requirement 9: Creator Profile/Dashboard Bar */}
-          <div className="bg-slate-900 text-white p-5 rounded-2xl border border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className={`bg-slate-900 text-white p-5 rounded-2xl border border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 ${creatorAccess?.paymentSystemEnabled ? '' : 'hidden'}`}>
             <div className="flex flex-wrap items-center gap-4 text-xs">
               {/* Creator Code Pill */}
               <div className="flex items-center gap-2 bg-slate-800 px-3.5 py-1.5 rounded-xl border border-slate-700">
@@ -271,13 +275,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
       <div className="p-6 md:p-8 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-850 to-blue-950 text-white border border-slate-800 shadow-sm relative overflow-hidden">
         <div className="relative z-10 max-w-2xl">
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-blue-900/40 text-blue-300 border border-blue-800/60 text-xs font-semibold uppercase tracking-wider mb-3">
-            <span>{isCreatorOrAdmin ? 'Creator Console' : 'Student Study Center'}</span>
+            <span>{isGuest ? 'Public Quizzes' : isCreatorOrAdmin ? 'Creator Console' : 'Student Study Center'}</span>
           </div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white">
-            Welcome back, {user?.fullName || 'Scholar'}
+            {isGuest ? 'Welcome to Remedi Pro' : `Welcome back, ${user?.fullName || 'Scholar'}`}
           </h1>
           <p className="text-sm text-slate-300 mt-2 leading-relaxed">
-            {isCreatorOrAdmin
+            {isGuest
+              ? 'Take public quizzes or enter a quiz code. Create a free account to unlock creator tools: build quizzes, run mocks and track results.'
+              : isCreatorOrAdmin
               ? 'Build multi-subject CBT examinations with real-time proctoring, custom score scales, passages, and instant leaderboard deployment.'
               : 'Sharpen your speed and subject mastery with time-calibrated CBT exams, comprehension passages, and diagnostic performance analytics.'}
           </p>
@@ -292,13 +298,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
                 <span>Create New Quiz</span>
               </button>
             ) : null}
-            <button
+            {isGuest && (
+              <button
+                onClick={() => onOpenAuthModal?.()}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-colors"
+              >
+                <span>Create account / Log in</span>
+              </button>
+            )}
+            {!isGuest && <button
               onClick={() => onNavigate('learning-hub')}
               className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold transition-colors border border-slate-700"
             >
               <BookOpen className="w-4 h-4 text-blue-400" />
               <span>Explore Learning Hub</span>
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -388,7 +402,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
           <div className="py-16 text-center text-xs text-slate-500">
             Loading educational assessments...
           </div>
-        ) : quizzes.length === 0 ? (
+        ) : listQuizzes.length === 0 ? (
           <div className="py-16 text-center">
             <FileQuestion className="w-10 h-10 text-slate-300 mx-auto mb-2" />
             <h3 className="text-sm font-semibold text-slate-800">No Quizzes Created Yet</h3>
@@ -419,7 +433,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {quizzes.slice(0, 8).map((quiz) => {
+                {listQuizzes.slice(0, 8).map((quiz) => {
                   const subjectList = quiz.subjects && quiz.subjects.length > 0
                     ? quiz.subjects.join(', ')
                     : 'General';

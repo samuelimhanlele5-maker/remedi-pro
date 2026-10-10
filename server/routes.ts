@@ -294,7 +294,7 @@ apiRouter.get('/quizzes', (req: Request, res: Response) => {
   }
 
   // Private quizzes are hidden from public lists (only the owner and admin can see them) unless the creator lists them
-  if (!creatorId && !creatorOnly) {
+  {
     list = list.filter(
       (q) =>
         q.accessType !== 'private' ||
@@ -530,6 +530,10 @@ apiRouter.post('/quizzes', (req: Request, res: Response) => {
 
 // Update quiz
 apiRouter.put('/quizzes/:id', (req: Request, res: Response) => {
+  {
+    const _q = dbManager.getData().quizzes.find((x) => x.id === req.params.id);
+    if (_q && !canManageQuiz(req, _q)) return res.status(403).json({ error: 'Only the quiz owner or admin can do this.' });
+  }
   const { id } = req.params;
   const {
     title,
@@ -628,6 +632,10 @@ apiRouter.put('/quizzes/:id', (req: Request, res: Response) => {
 
 // Delete quiz (CASCADE: delete quiz, questions, attempts, live sessions, links)
 apiRouter.delete('/quizzes/:id', (req: Request, res: Response) => {
+  {
+    const _q = dbManager.getData().quizzes.find((x) => x.id === req.params.id);
+    if (_q && !canManageQuiz(req, _q)) return res.status(403).json({ error: 'Only the quiz owner or admin can do this.' });
+  }
   const { id } = req.params;
   const db = dbManager.getData();
 
@@ -1062,11 +1070,15 @@ apiRouter.post('/cbt/reset-attempt', (req: Request, res: Response) => {
 // ==========================================
 
 apiRouter.get('/quizzes/:id/live-participants', (req: Request, res: Response) => {
+  {
+    const _q = dbManager.getData().quizzes.find((x) => x.id === req.params.id);
+    if (_q && !canManageQuiz(req, _q)) return res.status(403).json({ error: 'Only the quiz owner or admin can do this.' });
+  }
   const { id } = req.params;
   const db = dbManager.getData();
 
-  // Active within last 45 seconds
-  const cutoff = Date.now() - 45 * 1000;
+  // Active within last 60 seconds (phones send a signal every 20 seconds)
+  const cutoff = Date.now() - 60 * 1000;
   const activeSessions = db.liveSessions.filter((s) => {
     if (s.quizId !== id) return false;
     if (s.status !== 'active') return false;
@@ -1137,6 +1149,10 @@ apiRouter.get('/quizzes/:id/leaderboard', (req: Request, res: Response) => {
 
 // Hide participant from leaderboard without deleting attempt
 apiRouter.put('/quizzes/:id/leaderboard/hide-participant', (req: Request, res: Response) => {
+  {
+    const _q = dbManager.getData().quizzes.find((x) => x.id === req.params.id);
+    if (_q && !canManageQuiz(req, _q)) return res.status(403).json({ error: 'Only the quiz owner or admin can do this.' });
+  }
   const { attemptId } = req.body;
   if (!attemptId) {
     return res.status(400).json({ error: 'attemptId is required.' });
@@ -1166,7 +1182,17 @@ apiRouter.put('/quizzes/:id/leaderboard/hide-participant', (req: Request, res: R
 // Get all hubs
 apiRouter.get('/hubs', (req: Request, res: Response) => {
   const db = dbManager.getData();
-  const hubs = db.learningHubs.map((hub) => {
+  const viewer = getAuthUser(req);
+  const hubs = db.learningHubs
+    .filter(
+      (h) =>
+        h.isPublic !== false ||
+        (!!viewer &&
+          (viewer.role === 'admin' ||
+            viewer.id === h.creatorId ||
+            db.hubMembers.some((m) => m.hubId === h.id && m.userEmail.toLowerCase() === viewer.email.toLowerCase())))
+    )
+    .map((hub) => {
     const memberCount = db.hubMembers.filter((m) => m.hubId === hub.id).length;
     const materialCount = db.hubMaterials.filter((m) => m.hubId === hub.id).length;
     return {
@@ -1201,7 +1227,7 @@ apiRouter.get('/hubs/:id', (req: Request, res: Response) => {
     hub: {
       ...hub,
       memberCount: members.length,
-      members,
+      members: canManageHub(req, hub) ? members : [],
       materials,
       quizzes: creatorQuizzes,
     },
@@ -1210,13 +1236,17 @@ apiRouter.get('/hubs/:id', (req: Request, res: Response) => {
 
 // Create hub
 apiRouter.post('/hubs', (req: Request, res: Response) => {
-  const { creatorId, creatorName, title, description, subject, coverColor, isPublic } = req.body;
+  const { title, description, subject, coverColor, isPublic } = req.body;
+  const authUser = getAuthUser(req);
+  if (!authUser || authUser.disabled || (authUser.role !== 'creator' && authUser.role !== 'admin')) {
+    return res.status(401).json({ error: 'Please log in with a creator account to create a learning hub.' });
+  }
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Hub title is required.' });
   }
 
   // Access check when payment system is enabled (Requirement 3 & 6)
-  const accessCheck = dbManager.checkCreatorAccess(creatorId);
+  const accessCheck = dbManager.checkCreatorAccess(authUser.id);
   if (!accessCheck.canCreateHub) {
     return res.status(403).json({
       error: accessCheck.message || 'Active creator subscription required to create new learning hubs.',
@@ -1228,8 +1258,8 @@ apiRouter.post('/hubs', (req: Request, res: Response) => {
   const hubId = generateId('hub');
   const newHub: LearningHub = {
     id: hubId,
-    creatorId: creatorId || 'usr_creator_1',
-    creatorName: creatorName || 'Creator',
+    creatorId: authUser.id,
+    creatorName: authUser.fullName || 'Creator',
     title: title.trim(),
     description: description ? description.trim() : '',
     subject: subject ? subject.trim() : 'General Sciences',
@@ -1255,11 +1285,13 @@ apiRouter.post('/hubs', (req: Request, res: Response) => {
 // Join hub
 apiRouter.post('/hubs/:id/join', (req: Request, res: Response) => {
   const { id } = req.params;
-  const { userId, userName, userEmail } = req.body;
-
-  if (!userName || !userEmail) {
-    return res.status(400).json({ error: 'Name and email are required to join.' });
+  const authUser = getAuthUser(req);
+  if (!authUser || authUser.disabled) {
+    return res.status(401).json({ error: 'Please log in to join a learning hub.' });
   }
+  const userId = authUser.id;
+  const userName = authUser.fullName;
+  const userEmail = authUser.email;
 
   const cleanEmail = userEmail.trim().toLowerCase();
   const db = dbManager.getData();
@@ -1296,7 +1328,13 @@ apiRouter.post('/hubs/:id/join', (req: Request, res: Response) => {
 // Add material to hub
 apiRouter.post('/hubs/:id/materials', (req: Request, res: Response) => {
   const { id } = req.params;
-  const { creatorId, title, description, type, content, quizId } = req.body;
+  const { title, description, type, content, quizId } = req.body;
+  const authUser = getAuthUser(req);
+  const targetHub = dbManager.getData().learningHubs.find((h) => h.id === id);
+  if (!targetHub) return res.status(404).json({ error: 'Hub not found.' });
+  if (!authUser || !canManageHub(req, targetHub)) {
+    return res.status(403).json({ error: 'Only the hub owner or admin can add materials.' });
+  }
 
   if (!title || !content) {
     return res.status(400).json({ error: 'Title and content are required.' });
@@ -1305,7 +1343,7 @@ apiRouter.post('/hubs/:id/materials', (req: Request, res: Response) => {
   const material: HubMaterial = {
     id: generateId('mat'),
     hubId: id,
-    creatorId: creatorId || 'usr_creator_1',
+    creatorId: authUser.id,
     title: title.trim(),
     description: description ? description.trim() : '',
     type: type || 'note',
@@ -1323,6 +1361,11 @@ apiRouter.post('/hubs/:id/materials', (req: Request, res: Response) => {
 
 // Hub student performance analytics
 apiRouter.get('/hubs/:id/performance', (req: Request, res: Response) => {
+  {
+    const _h = dbManager.getData().learningHubs.find((x) => x.id === req.params.id);
+    if (!_h) return res.status(404).json({ error: 'Hub not found.' });
+    if (!canManageHub(req, _h)) return res.status(403).json({ error: 'Only the hub owner or admin can view this.' });
+  }
   const { id } = req.params;
   const db = dbManager.getData();
 
@@ -1358,6 +1401,12 @@ apiRouter.get('/hubs/:id/performance', (req: Request, res: Response) => {
 // ==========================================
 
 apiRouter.get('/analytics/student/:email', (req: Request, res: Response) => {
+  {
+    const _au = getAuthUser(req);
+    if (!_au || (_au.role !== 'admin' && _au.email.toLowerCase() !== String(req.params.email).toLowerCase())) {
+      return res.status(403).json({ error: 'You can only view your own results.' });
+    }
+  }
   const { email } = req.params;
   const cleanEmail = email.trim().toLowerCase();
   const db = dbManager.getData();
@@ -2130,4 +2179,10 @@ function validCodeForQuiz(db: any, quiz: Quiz, code: any): boolean {
   return (db.registrations || []).some(
     (r: Registration) => r.quizId === quiz.id && r.code === c && r.status === 'active' && !r.attemptId
   );
+}
+
+
+function canManageHub(req: Request, hub: LearningHub): boolean {
+  const u = getAuthUser(req);
+  return !!u && !u.disabled && (u.role === 'admin' || u.id === hub.creatorId);
 }

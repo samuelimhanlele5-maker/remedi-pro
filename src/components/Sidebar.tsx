@@ -20,6 +20,7 @@ interface SidebarProps {
   onSelectTab: (tab: string) => void;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -27,13 +28,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   mobileOpen,
   onCloseMobile,
+  onOpenAuthModal,
 }) => {
   const { user } = useAuth();
+  const isGuest = !user;
 
   const isCreatorOrAdmin = user?.role === 'creator' || user?.role === 'admin';
   const isAdmin = user?.role === 'admin';
 
-  const navItems = [
+  const navItems = isGuest
+    ? [{ id: 'dashboard', label: 'Public Quizzes', icon: LayoutDashboard }]
+    : [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'my-quizzes', label: 'My Quizzes', icon: FileQuestion },
     ...(isCreatorOrAdmin ? [{ id: 'create-quiz', label: 'Create Quiz', icon: PlusCircle }] : []),
@@ -95,6 +100,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </nav>
           </div>
 
+          {isGuest && (
+            <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 text-slate-300">
+              <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                Create a free account to unlock creator tools: build quizzes, run mocks and track results.
+              </p>
+              <button
+                onClick={() => {
+                  onOpenAuthModal?.();
+                  onCloseMobile();
+                }}
+                className="w-full px-3 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg"
+              >
+                Create account / Log in
+              </button>
+            </div>
+          )}
+
           {/* Creator Tools Section */}
           {isCreatorOrAdmin && (
             <div>
@@ -143,6 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
 
           {/* Quick Notice Card */}
+          {!isGuest && (
           <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 text-slate-300">
             <div className="flex items-center gap-2 mb-1.5 text-blue-400 font-semibold text-xs">
               <Sparkles className="w-4 h-4" />
@@ -152,6 +175,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Unrestricted access to CBT examination simulations, question creation, multi-subject analytics, and live monitoring.
             </p>
           </div>
+          )}
         </div>
 
         {/* Footer info */}
@@ -163,6 +187,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Mobile Bottom Navigation Bar */}
       <nav className="fixed bottom-0 left-0 right-0 z-30 bg-slate-900 border-t border-slate-800 flex items-center justify-around h-14 px-2 md:hidden">
+        {isGuest ? (
+          <>
+            <button
+              onClick={() => onSelectTab('dashboard')}
+              className="flex flex-col items-center justify-center flex-1 py-1 text-blue-400"
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span className="text-[10px] mt-1 font-medium">Quizzes</span>
+            </button>
+            <button
+              onClick={() => onOpenAuthModal?.()}
+              className="flex flex-col items-center justify-center flex-1 py-1 text-slate-300 hover:text-white"
+            >
+              <User className="w-4 h-4 text-blue-400" />
+              <span className="text-[10px] mt-1 font-medium">Account</span>
+            </button>
+          </>
+        ) : (
+          <>
         <button
           onClick={() => onSelectTab('dashboard')}
           className={`flex flex-col items-center justify-center flex-1 py-1 transition-colors ${
@@ -210,6 +253,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <BarChart3 className="w-4 h-4" />
           <span className="text-[10px] mt-1 font-medium">Results</span>
         </button>
+          </>
+        )}
       </nav>
     </>
   );

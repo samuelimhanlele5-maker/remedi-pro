@@ -174,6 +174,10 @@ export interface Quiz {
   scoreScale: ScoreScale;
   accessType: 'public' | 'private';
   maxAttempts?: number;
+  listedPublicly?: boolean;
+  opensAt?: string | null;
+  closesAt?: string | null;
+  windowHours?: number;
   shareCode: string;
   leaderboardEnabled: boolean;
   calculatorEnabled?: boolean;

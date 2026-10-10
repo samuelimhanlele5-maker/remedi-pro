@@ -16,6 +16,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_USER_KEY = 'remedi_user_session';
+const LOCAL_STORAGE_TOKEN_KEY = 'remedi_auth_token';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -25,22 +26,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setUser(parsed);
-      } else {
-        // Default to demo admin / creator user for seamless immediate testing if nothing exists
-        const defaultUser: User = {
-          id: 'usr_admin',
-          email: 'samuelosemu5@gmail.com',
-          fullName: 'Samuel Osemu',
-          role: 'admin',
-          bio: 'Remedi Pro Lead Platform Administrator & Educational Creator',
-          disabled: false,
-          createdAt: new Date().toISOString(),
-        };
-        setUser(defaultUser);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(defaultUser));
+      const token = localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY);
+      if (saved && token) {
+        setUser(JSON.parse(saved));
+      } else if (saved) {
+        // Old session without a signed login token: sign out so the person logs in again
+        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
       }
     } catch (e) {
       console.error('Error loading stored user session:', e);
@@ -51,12 +42,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (email: string, pass: string) => {
     const res = await api.login({ email, password: pass });
+    localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, res.token);
     setUser(res.user);
     localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(res.user));
   };
 
   const register = async (email: string, pass: string, fullName: string, role?: string) => {
     const res = await api.register({ email, password: pass, fullName, role });
+    localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, res.token);
     setUser(res.user);
     localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(res.user));
   };
@@ -64,6 +57,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setUser(null);
     localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+    localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
   };
 
   const resetPassword = async (email: string, newPass: string) => {

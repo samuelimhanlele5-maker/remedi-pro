@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { PasswordInput } from '../components/PasswordInput.tsx';
 import {
   KeyRound,
   Shield,
@@ -97,8 +98,7 @@ export const SettingsView: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               New Password
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               placeholder="Minimum 6 characters"
               value={newPassword}
@@ -111,8 +111,7 @@ export const SettingsView: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Confirm New Password
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               placeholder="Re-enter password"
               value={confirmPassword}

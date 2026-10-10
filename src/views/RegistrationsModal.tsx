@@ -17,6 +17,7 @@ function waNumber(phone: string): string {
 export const RegistrationsModal: React.FC<RegistrationsModalProps> = ({ quiz, onClose }) => {
   const [list, setList] = useState<Registration[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -26,10 +27,13 @@ export const RegistrationsModal: React.FC<RegistrationsModalProps> = ({ quiz, on
   const link = `${window.location.origin}/?register=${quiz.shareCode}`;
 
   const load = async () => {
+    setLoadFailed(false);
     try {
       const res = await api.listRegistrations(quiz.id);
       setList(res.registrations);
+      setError(null);
     } catch (e: any) {
+      setLoadFailed(true);
       setError(e.message || 'Could not load registrations.');
     } finally {
       setLoading(false);
@@ -115,9 +119,14 @@ export const RegistrationsModal: React.FC<RegistrationsModalProps> = ({ quiz, on
           </form>
 
           <div>
-            <p className="text-[11px] font-bold text-slate-700 mb-2">
-              {loading ? 'Loading...' : `${list.length} registered`}
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] font-bold text-slate-700">
+                {loading ? 'Loading...' : loadFailed ? 'Could not load the list' : `${list.length} registered`}
+              </p>
+              <button onClick={load} className="text-[11px] font-semibold text-blue-600 hover:underline">
+                Refresh
+              </button>
+            </div>
             <div className="space-y-2">
               {list.map((r) => (
                 <div key={r.id} className="p-3 border border-slate-200 rounded-xl text-xs">

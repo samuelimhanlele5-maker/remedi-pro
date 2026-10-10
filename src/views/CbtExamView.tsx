@@ -115,6 +115,21 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
     loadQuiz();
   }, [quizIdOrCode, user]);
 
+  // After a private quiz's questions arrive, continue into the exam
+  const [pendingStart, setPendingStart] = useState<{ name: string; email: string } | null>(null);
+  useEffect(() => {
+    if (!pendingStart || !quiz || !(quiz.questions || []).some((q) => q.question)) return;
+    const who = pendingStart;
+    setPendingStart(null);
+    const hasOptional = quiz.optionalSubjects && quiz.optionalSubjects.length > 0;
+    const requiresPick = (quiz.requiredOptionalCount || 0) > 0;
+    if (hasOptional && requiresPick) {
+      setPhase('subject_selection');
+    } else {
+      startExamWithSubjects(quiz.subjects, who);
+    }
+  }, [pendingStart, quiz]);
+
   // Gate Check: verify one-attempt control with participant email
   const handleProceedFromGate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,10 +160,29 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
       }
       const res = await api.checkAccess(quiz.id, emailToUse);
 
+      if (res.schedule && res.schedule.status === 'upcoming') {
+        setGateError(
+          `This mock has not opened yet. It opens on ${new Date(res.schedule.opensAt || '').toLocaleString()}.`
+        );
+        return;
+      }
+      if (res.schedule && res.schedule.status === 'closed') {
+        setGateError(`This mock is closed. It closed on ${new Date(res.schedule.closesAt || '').toLocaleString()}.`);
+        return;
+      }
+
       if (!res.canAttempt && res.priorAttempt) {
         setPriorAttempt(res.priorAttempt);
         setSubmittedAttempt(res.priorAttempt);
         setPhase('result');
+        return;
+      }
+
+      // Private quizzes: questions are only sent after the exam code is accepted
+      if (priv) {
+        const full = await api.getQuiz(quiz.id, accessCode.trim());
+        setQuiz(full.quiz);
+        setPendingStart({ name: nameToUse, email: emailToUse });
         return;
       }
 
@@ -482,6 +516,12 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
           </div>
 
           <form onSubmit={handleProceedFromGate} className="p-6 space-y-4">
+            {quiz?.opensAt && quiz?.closesAt && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                <strong>Scheduled mock:</strong> open from {new Date(quiz.opensAt).toLocaleString()} to{' '}
+                {new Date(quiz.closesAt).toLocaleString()}.
+              </div>
+            )}
             {isPrivate ? (
               <>
                 <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100 text-xs text-blue-900 leading-relaxed">
@@ -1379,13 +1419,7 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
 
           {/* Action buttons */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
-            <button
-              onClick={() => setShowAnswerReview(!showAnswerReview)}
-              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors flex items-center gap-1.5"
-            >
-              <Eye className="w-4 h-4 text-slate-500" />
-              <span>{showAnswerReview ? 'Hide Answers' : 'Review Answers & Keys'}</span>
-            </button>
+            <span />
 
             <div className="flex items-center gap-2">
               <button
@@ -1406,7 +1440,7 @@ export const CbtExamView: React.FC<CbtExamViewProps> = ({
         </div>
 
         {/* Answer Review Section by Subject */}
-        {showAnswerReview && (
+        {false && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">

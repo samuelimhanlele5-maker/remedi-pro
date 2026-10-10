@@ -119,10 +119,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
   };
 
   // Aggregated metrics
-  const totalQuizzes = quizzes.length;
-  const totalParticipants = quizzes.reduce((acc, q) => acc + (q.participantCount || 0), 0);
-  const totalScoreSums = quizzes.reduce((acc, q) => acc + (q.avgScore || 0), 0);
-  const overallAvgScore = totalQuizzes > 0 ? Math.round(totalScoreSums / totalQuizzes) : 0;
+  // Admin sees platform-wide totals; creators see only their own quizzes; students/guests see no totals
+  const statQuizzes = user?.role === 'admin' ? quizzes : quizzes.filter((q) => q.creatorId === user?.id);
+  const totalQuizzes = statQuizzes.length;
+  const totalParticipants = statQuizzes.reduce((acc, q) => acc + (q.participantCount || 0), 0);
+  const weightedScoreSum = statQuizzes.reduce((acc, q) => acc + (q.avgScore || 0) * (q.participantCount || 0), 0);
+  const overallAvgScore = totalParticipants > 0 ? Math.round(weightedScoreSum / totalParticipants) : 0;
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -302,6 +304,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
       </div>
 
       {/* Metrics Row (Requirement 3: Total quizzes, Total participants, Average score, Learning Hub status) */}
+      {isCreatorOrAdmin && (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Quizzes */}
         <div className="p-4 md:p-5 rounded-xl bg-white border border-slate-200 shadow-xs">
@@ -353,6 +356,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onTake
           <p className="text-[11px] text-slate-500 mt-1">Repository materials published</p>
         </div>
       </div>
+      )}
 
       {/* Recent Quizzes Section (Requirement 3: Title, Subjects, Participants, Average score, Date, Actions) */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.ts';
 import { LeaderboardEntry } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { Trophy, X, EyeOff, Medal, Award, CheckCircle } from 'lucide-react';
+import { Trophy, X, EyeOff, Medal, Award, CheckCircle, RotateCcw } from 'lucide-react';
 
 interface LeaderboardModalProps {
   quizId: string;
@@ -40,6 +40,19 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   useEffect(() => {
     fetchLeaderboard();
   }, [quizId]);
+
+  const handleRetake = async (attemptId: string, studentName: string) => {
+    if (!window.confirm(`Allow ${studentName} to retake this quiz? Their current attempt will be deleted.`)) return;
+    try {
+      await api.resetAttempt({ attemptId });
+      setStatusMessage(`${studentName} can now retake the quiz.`);
+      setTimeout(() => setStatusMessage(null), 3000);
+      fetchLeaderboard();
+    } catch (e: any) {
+      setStatusMessage(e.message || 'Could not allow retake.');
+      setTimeout(() => setStatusMessage(null), 4000);
+    }
+  };
 
   const handleHideParticipant = async (attemptId: string, studentName: string) => {
     try {
@@ -157,7 +170,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                       <p className="text-sm font-bold text-slate-900 leading-tight">
                         {entry.student}
                       </p>
-                      <p className="text-[11px] text-slate-500 truncate">{entry.email}</p>
+                      {entry.email && <p className="text-[11px] text-slate-500 truncate">{entry.email}</p>}
                     </div>
 
                     {/* Subjects */}
@@ -174,6 +187,15 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                       </span>
 
                       {/* Creator can remove from visible leaderboard without deleting underlying attempt */}
+                      {isCreatorOrAdmin && (
+                        <button
+                          onClick={() => handleRetake(entry.attemptId, entry.student)}
+                          className="p-1 text-slate-400 hover:text-blue-600 rounded hover:bg-slate-100 transition-colors"
+                          title="Allow retake (deletes this attempt)"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                        </button>
+                      )}
                       {isCreatorOrAdmin && (
                         <button
                           onClick={() => handleHideParticipant(entry.attemptId, entry.student)}

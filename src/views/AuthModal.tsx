@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { PasswordInput } from '../components/PasswordInput.tsx';
 import { X, Lock, Mail, User, AlertCircle, CheckCircle } from 'lucide-react';
 
 interface AuthModalProps {
@@ -148,8 +149,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="password"
+              <PasswordInput
                 required
                 placeholder="••••••••"
                 value={password}
